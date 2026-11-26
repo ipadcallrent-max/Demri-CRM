@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { Client } from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -37,7 +37,9 @@ beforeAll(async () => {
   await db.query("drop schema if exists public cascade; create schema public;");
   await db.query("drop schema if exists auth cascade;");
   await db.query(read("tests/auth_stub.sql"));
-  await db.query(read("supabase/migrations/20261126000000_init.sql"));
+  for (const f of readdirSync(join(__dirname, "..", "supabase/migrations")).sort()) {
+    await db.query(read(`supabase/migrations/${f}`));
+  }
   await db.query("grant usage on schema public, auth to authenticated");
   await db.query("grant all on all tables in schema public to authenticated");
   await db.query("grant execute on all functions in schema public, auth to authenticated");
@@ -181,5 +183,38 @@ describe("journal d'activité", () => {
     await as(ADMIN, "update dossiers set supprime_le = now() where id = $1", [d.id]);
     const r = await as<{ supprime_le: string | null }>(ADMIN, "select supprime_le from factures");
     expect(r[0].supprime_le).not.toBeNull();
+  });
+});
+
+describe("versement groupé et RGPD", () => {
+  it("enregistre un versement qui règle plusieurs factures en une fois", async () => {
+    const [d] = await as<{ id: string }>(EDITEUR, "insert into dossiers (client, montant) values ('G', 9000) returning id");
+    const [f1] = await as<{ id: string }>(EDITEUR, "insert into factures (dossier_id, numero, montant) values ($1, 'F1', 2000) returning id", [d.id]);
+    const [f2] = await as<{ id: string }>(EDITEUR, "insert into factures (dossier_id, numero, montant) values ($1, 'F2', 3000) returning id", [d.id]);
+    await as(EDITEUR, "select enregistrer_versement(current_date, 'PNC', 5000, 'virement', $1::uuid[])", [[f1.id, f2.id]]);
+    const s = await solde();
+    expect(s.a_restes_dus).toBe(4000);
+    expect(s.d_versements_pnc).toBe(0);
+    expect(s.solde).toBe(4000);
+    await expect(
+      as(EDITEUR, "select enregistrer_versement(current_date, 'PNC', 100, null, $1::uuid[])", [[f1.id]]),
+    ).resolves.toBeDefined(); // déjà payée : ignorée, le versement reste libre
+    expect((await solde()).solde).toBe(3900);
+  });
+
+  it("annule tout si le versement ne couvre pas les factures cochées", async () => {
+    const [d] = await as<{ id: string }>(EDITEUR, "insert into dossiers (client, montant) values ('H', 9000) returning id");
+    const [f] = await as<{ id: string }>(EDITEUR, "insert into factures (dossier_id, numero, montant) values ($1, 'F1', 2000) returning id", [d.id]);
+    await expect(as(EDITEUR, "select enregistrer_versement(current_date, 'PNC', 1000, null, $1::uuid[])", [[f.id]])).rejects.toThrow(/ne couvre pas/);
+    expect(await as(ADMIN, "select * from versements")).toHaveLength(0);
+  });
+
+  it("efface un client et retire son nom du journal (admin uniquement)", async () => {
+    const [d] = await as<{ id: string }>(EDITEUR, "insert into dossiers (client, montant) values ('Mme Confidentielle', 100) returning id");
+    await expect(as(EDITEUR, "select effacer_dossier_rgpd($1)", [d.id])).rejects.toThrow(/administrateurs/);
+    await as(ADMIN, "select effacer_dossier_rgpd($1)", [d.id]);
+    const j = await as<{ description: string }>(ADMIN, "select description from journal");
+    expect(j.some((x) => x.description.includes("Confidentielle"))).toBe(false);
+    expect(await as(ADMIN, "select * from dossiers")).toHaveLength(0);
   });
 });
