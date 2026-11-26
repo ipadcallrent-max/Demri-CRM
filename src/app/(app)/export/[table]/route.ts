@@ -32,7 +32,7 @@ const cell = (v: unknown) => {
   if (v === null || v === undefined) return "";
   if (typeof v === "boolean") return v ? "oui" : "non";
   let s = String(v);
-  if (/^-?\d+(\.\d+)?$/.test(s)) s = s.replace(".", ",");
+  if (/^-?\d+(\.\d+)?$/.test(s)) s = Number(s).toFixed(2).replace(".", ",");
   else if (/^\d{4}-\d{2}-\d{2}/.test(s)) s = s.slice(0, 10).split("-").reverse().join("/");
   s = LIBELLES[s] ?? s;
   return /[;"\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;

@@ -47,7 +47,7 @@ export function DataProvider({ moi, children }: { moi: Profil; children: React.R
       supabase.from("factures").select("*").is("supprime_le", null),
       supabase.from("depenses").select("*").is("supprime_le", null),
       supabase.from("vue_versements").select("*"),
-      supabase.from("journal").select("id, le, utilisateur, description").order("le", { ascending: false }).limit(200),
+      supabase.from("journal").select("id, le, utilisateur, description").order("id", { ascending: false }).limit(200),
       supabase.from("profils").select("*").order("nom"),
       supabase.from("vue_solde").select("*").single(),
     ]);
